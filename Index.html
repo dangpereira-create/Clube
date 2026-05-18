@@ -1,0 +1,504 @@
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Clube do Parque 🌳</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@supabase/supabase-js@2/umd/supabase.min.js"></script>
+  <script src="https://unpkg.com/qrcode@1.5.1/build/qrcode.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #f0f4f0; color: #1a2e1a; }
+    .container { max-width: 500px; margin: 0 auto; padding: 20px; }
+    input, button, select { padding: 12px; margin: 6px 0; width: 100%; font-size: 16px; border-radius: 8px; border: 1px solid #ccc; }
+    button { background: #2d5a27; color: white; border: none; font-weight: bold; cursor: pointer; }
+    button:disabled { opacity: 0.6; }
+    .card { background: white; border-radius: 12px; padding: 16px; margin: 12px 0; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+    .error { color: #c00; background: #ffe6e6; padding: 10px; border-radius: 8px; }
+    .success { color: #2d5a27; background: #e6ffe6; padding: 10px; border-radius: 8px; }
+    nav { background: #2d5a27; padding: 12px 20px; color: white; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+    nav a, nav button { color: white; background: none; border: none; text-decoration: none; margin: 0 5px; font-size: 14px; }
+    nav span { font-weight: bold; }
+    .tabs { display: flex; gap: 8px; margin: 16px 0; flex-wrap: wrap; }
+    .tabs button { width: auto; padding: 8px 16px; background: #ddd; color: #333; }
+    .tabs button.active { background: #2d5a27; color: white; }
+    h2, h3 { margin-bottom: 12px; }
+    .qr-container { text-align: center; margin: 20px 0; }
+    .preview-img { max-width: 100%; border-radius: 8px; margin: 10px 0; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // ==================== CONFIGURAÇÃO ====================
+    - [ ] const SUPABASE_URL = "https://jiscgagculkqedvajqug.supabase.co"; // sua URL
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imppc2NnYWdjdWxrcWVkdmFqcXVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5OTcwOTgsImV4cCI6MjA5NDU3MzA5OH0.v1e5w0jkkafN1hraAx50CqnAuQqtzWP5CxIluwqb-YI"; // sua anon key completa
+
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    const BUCKET_NAME = "notas";
+    const EDGE_FUNCTION = "consultar-nfce";
+
+    // ==================== APP PRINCIPAL ====================
+    function App() {
+      const [session, setSession] = useState(null);
+      const [role, setRole] = useState(null);
+      const [loading, setLoading] = useState(true);
+
+      useEffect(() => {
+        supabase.auth.getSession().then(({ data: { session } }) => {
+          setSession(session);
+          if (session) fetchProfile(session.user.id);
+          else setLoading(false);
+        });
+
+        const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+          setSession(session);
+          if (session) fetchProfile(session.user.id);
+          else setRole(null);
+        });
+        return () => authListener.subscription.unsubscribe();
+      }, []);
+
+      async function fetchProfile(userId) {
+        const { data: cliente } = await supabase.from("Clientes").select("tipo").eq("user_id", userId).maybeSingle();
+        if (cliente) setRole(cliente.tipo);
+        else {
+          const { data: comerciante } = await supabase.from("Comerciantes").select("id").eq("user_id", userId).maybeSingle();
+          setRole(comerciante ? "merchant" : "customer");
+        }
+        setLoading(false);
+      }
+
+      function logout() {
+        supabase.auth.signOut();
+      }
+
+      if (loading) return <div className="container">Carregando...</div>;
+
+      return (
+        <div>
+          {session ? (
+            <AuthenticatedApp session={session} role={role} logout={logout} />
+          ) : (
+            <UnauthenticatedApp />
+          )}
+        </div>
+      );
+    }
+
+    // ==================== NÃO AUTENTICADO ====================
+    function UnauthenticatedApp() {
+      const [page, setPage] = useState("login");
+
+      if (page === "login") return <Login setPage={setPage} />;
+      if (page === "registerCustomer") return <RegisterCustomer setPage={setPage} />;
+      if (page === "registerMerchant") return <RegisterMerchant setPage={setPage} />;
+    }
+
+    function Login({ setPage }) {
+      const [email, setEmail] = useState("");
+      const [password, setPassword] = useState("");
+      const [error, setError] = useState("");
+
+      async function handleSubmit(e) {
+        e.preventDefault();
+        setError("");
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) setError(error.message);
+      }
+
+      return (
+        <div className="container">
+          <h2>Login</h2>
+          <form onSubmit={handleSubmit}>
+            <input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} required />
+            <input type="password" placeholder="Senha" value={password} onChange={e => setPassword(e.target.value)} required />
+            <button type="submit">Entrar</button>
+            {error && <div className="error">{error}</div>}
+          </form>
+          <p style={{ marginTop: 16 }}>
+            <a href="#" onClick={() => setPage("registerCustomer")}>Cadastre-se como cliente</a><br/>
+            <a href="#" onClick={() => setPage("registerMerchant")}>Cadastre-se como comerciante</a>
+          </p>
+        </div>
+      );
+    }
+
+    function RegisterCustomer({ setPage }) {
+      const [email, setEmail] = useState("");
+      const [password, setPassword] = useState("");
+      const [cpf, setCpf] = useState("");
+      const [error, setError] = useState("");
+      const [success, setSuccess] = useState("");
+
+      async function handleSubmit(e) {
+        e.preventDefault();
+        setError("");
+        const { data: authData, error: authError } = await supabase.auth.signUp({ email, password });
+        if (authError) { setError(authError.message); return; }
+        const user = authData.user;
+        if (user) {
+          const { error: profileError } = await supabase.from("Clientes").insert({
+            user_id: user.id,
+            tipo: "customer",
+            cpf: cpf.replace(/\D/g, ""),
+            pontos: 0
+          });
+          if (profileError) setError(profileError.message);
+          else setSuccess("Cadastro criado! Você já pode fazer login.");
+        }
+      }
+
+      return (
+        <div className="container">
+          <h2>Cadastro de Cliente</h2>
+          <form onSubmit={handleSubmit}>
+            <input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} required />
+            <input type="password" placeholder="Senha (mínimo 6 caracteres)" value={password} onChange={e => setPassword(e.target.value)} required />
+            <input type="text" placeholder="CPF (opcional)" value={cpf} onChange={e => setCpf(e.target.value)} />
+            <button type="submit">Cadastrar</button>
+            {error && <div className="error">{error}</div>}
+            {success && <div className="success">{success}</div>}
+          </form>
+          <a href="#" onClick={() => setPage("login")}>Voltar para login</a>
+        </div>
+      );
+    }
+
+    function RegisterMerchant({ setPage }) {
+      const [email, setEmail] = useState("");
+      const [password, setPassword] = useState("");
+      const [cnpj, setCnpj] = useState("");
+      const [nome, setNome] = useState("");
+      const [error, setError] = useState("");
+      const [success, setSuccess] = useState("");
+
+      async function handleSubmit(e) {
+        e.preventDefault();
+        setError("");
+        const { data: authData, error: authError } = await supabase.auth.signUp({ email, password });
+        if (authError) { setError(authError.message); return; }
+        const user = authData.user;
+        if (user) {
+          const { error: profileError } = await supabase.from("Comerciantes").insert({
+            user_id: user.id,
+            cnpj: cnpj.replace(/\D/g, ""),
+            nome_fantasia: nome,
+            status: "pendente",
+            regra_pontos: 1
+          });
+          if (profileError) setError(profileError.message);
+          else setSuccess("Cadastro enviado para aprovação! Aguarde.");
+        }
+      }
+
+      return (
+        <div className="container">
+          <h2>Cadastro de Comerciante</h2>
+          <form onSubmit={handleSubmit}>
+            <input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} required />
+            <input type="password" placeholder="Senha" value={password} onChange={e => setPassword(e.target.value)} required />
+            <input type="text" placeholder="CNPJ (apenas números)" value={cnpj} onChange={e => setCnpj(e.target.value)} required />
+            <input type="text" placeholder="Nome da loja" value={nome} onChange={e => setNome(e.target.value)} required />
+            <button type="submit">Cadastrar</button>
+            {error && <div className="error">{error}</div>}
+            {success && <div className="success">{success}</div>}
+          </form>
+          <a href="#" onClick={() => setPage("login")}>Voltar para login</a>
+        </div>
+      );
+    }
+
+    // ==================== AUTENTICADO ====================
+    function AuthenticatedApp({ session, role, logout }) {
+      const [tab, setTab] = useState(role === "merchant" ? "merchantHome" : role === "admin" ? "adminHome" : "customerHome");
+      const userId = session.user.id;
+
+      return (
+        <div>
+          <nav>
+            <span>🌳 Clube do Parque</span>
+            <span>{session.user.email} ({role})</span>
+            <button onClick={logout} style={{ background: "#b33", padding: "6px 12px", width: "auto" }}>Sair</button>
+          </nav>
+
+          <div className="tabs container">
+            {role === "customer" && (
+              <>
+                <button onClick={() => setTab("customerHome")} className={tab === "customerHome" ? "active" : ""}>Início</button>
+                <button onClick={() => setTab("customerScan")} className={tab === "customerScan" ? "active" : ""}>Registrar Nota</button>
+                <button onClick={() => setTab("customerHistory")} className={tab === "customerHistory" ? "active" : ""}>Histórico</button>
+                <button onClick={() => setTab("customerPoints")} className={tab === "customerPoints" ? "active" : ""}>Pontos</button>
+              </>
+            )}
+            {role === "merchant" && (
+              <>
+                <button onClick={() => setTab("merchantHome")} className={tab === "merchantHome" ? "active" : ""}>Início</button>
+                <button onClick={() => setTab("merchantQr")} className={tab === "merchantQr" ? "active" : ""}>QR Code</button>
+              </>
+            )}
+            {role === "admin" && (
+              <>
+                <button onClick={() => setTab("adminHome")} className={tab === "adminHome" ? "active" : ""}>Aprovar Comerciantes</button>
+                <button onClick={() => setTab("adminCustomers")} className={tab === "adminCustomers" ? "active" : ""}>Clientes</button>
+              </>
+            )}
+          </div>
+
+          <div className="container">
+            {tab === "customerHome" && <CustomerHome userId={userId} />}
+            {tab === "customerScan" && <CustomerScan userId={userId} />}
+            {tab === "customerHistory" && <CustomerHistory userId={userId} />}
+            {tab === "customerPoints" && <CustomerPoints userId={userId} />}
+            {tab === "merchantHome" && <MerchantHome userId={userId} />}
+            {tab === "merchantQr" && <MerchantQr userId={userId} />}
+            {tab === "adminHome" && <AdminHome />}
+            {tab === "adminCustomers" && <AdminCustomers />}
+          </div>
+        </div>
+      );
+    }
+
+    // ==================== CLIENTE ====================
+    function CustomerHome({ userId }) {
+      const [pontos, setPontos] = useState(0);
+      useEffect(() => {
+        supabase.from("Clientes").select("pontos").eq("user_id", userId).single().then(({ data }) => {
+          if (data) setPontos(data.pontos);
+        });
+      }, [userId]);
+      return (
+        <div>
+          <h2>Bem-vindo(a)!</h2>
+          <div className="card">
+            <p>Seu saldo: <strong>{pontos} pontos</strong></p>
+          </div>
+          <p>Use o menu para registrar uma nota fiscal ou ver seu histórico.</p>
+        </div>
+      );
+    }
+
+    function CustomerScan({ userId }) {
+      const [file, setFile] = useState(null);
+      const [preview, setPreview] = useState(null);
+      const [loading, setLoading] = useState(false);
+      const [message, setMessage] = useState("");
+
+      function handleFileChange(e) {
+        const f = e.target.files[0];
+        if (f) {
+          setFile(f);
+          setPreview(URL.createObjectURL(f));
+          setMessage("");
+        }
+      }
+
+      async function handleUpload() {
+        if (!file) return;
+        setLoading(true);
+        setMessage("Enviando imagem...");
+
+        const fileName = `${Date.now()}_${userId}.jpg`;
+        const { error: uploadError } = await supabase.storage.from(BUCKET_NAME).upload(fileName, file);
+        if (uploadError) {
+          setMessage("Erro no upload: " + uploadError.message);
+          setLoading(false);
+          return;
+        }
+
+        const { data: { publicUrl } } = supabase.storage.from(BUCKET_NAME).getPublicUrl(fileName);
+
+        setMessage("Processando nota fiscal com IA...");
+        const { data, error } = await supabase.functions.invoke(EDGE_FUNCTION, {
+          body: { image_url: publicUrl, user_id: userId }
+        });
+
+        if (error) {
+          setMessage("Erro na função: " + error.message);
+        } else if (data?.sucesso) {
+          setMessage(`✅ ${data.mensagem || ("Ganhou " + data.pontos_ganhos + " pontos em " + data.comerciante)}`);
+        } else {
+          setMessage("❌ " + (data?.error || "Erro desconhecido"));
+        }
+        setLoading(false);
+      }
+
+      return (
+        <div>
+          <h2>Registrar Nota Fiscal</h2>
+          <p>Tire uma foto nítida da nota fiscal (NFC-e).</p>
+          <input type="file" accept="image/*" capture="environment" onChange={handleFileChange} />
+          {preview && <img src={preview} alt="Preview" className="preview-img" />}
+          <button onClick={handleUpload} disabled={!file || loading} style={{ marginTop: 12 }}>
+            {loading ? "Processando..." : "Enviar e Pontuar"}
+          </button>
+          {message && <div className={message.startsWith("✅") ? "success" : message.startsWith("❌") ? "error" : ""} style={{ marginTop: 12 }}>{message}</div>}
+        </div>
+      );
+    }
+
+    function CustomerHistory({ userId }) {
+      const [notas, setNotas] = useState([]);
+      useEffect(() => {
+        supabase.from("Notas_fiscais")
+          .select("*, Comerciantes(nome_fantasia)")
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false })
+          .then(({ data }) => setNotas(data || []));
+      }, [userId]);
+
+      return (
+        <div>
+          <h2>Histórico de Notas</h2>
+          {notas.length === 0 && <p>Nenhuma nota registrada ainda.</p>}
+          {notas.map(nota => (
+            <div className="card" key={nota.id}>
+              <p><strong>Comércio:</strong> {nota.Comerciantes?.nome_fantasia || "Desconhecido"}</p>
+              <p><strong>Valor:</strong> R$ {nota.valor?.toFixed(2)}</p>
+              <p><strong>Data:</strong> {nota.data_emissao}</p>
+              <p><strong>Pontos ganhos:</strong> {nota.pontos_gerados}</p>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    function CustomerPoints({ userId }) {
+      const [pontos, setPontos] = useState(0);
+      useEffect(() => {
+        supabase.from("Clientes").select("pontos").eq("user_id", userId).single().then(({ data }) => {
+          if (data) setPontos(data.pontos);
+        });
+      }, [userId]);
+      return (
+        <div>
+          <h2>Seus Pontos</h2>
+          <div className="card">
+            <p>Total acumulado: <strong>{pontos} pontos</strong></p>
+          </div>
+        </div>
+      );
+    }
+
+    // ==================== COMERCIANTE ====================
+    function MerchantHome({ userId }) {
+      const [stats, setStats] = useState({ totalClientes: 0, totalPontos: 0 });
+      useEffect(() => {
+        supabase.from("Comerciantes").select("id").eq("user_id", userId).single().then(({ data: comerciante }) => {
+          if (comerciante) {
+            supabase.from("Notas_fiscais").select("id, pontos_gerados", { count: "exact" }).eq("comerciante_id", comerciante.id).then(({ count, data: notas }) => {
+              const pontos = notas?.reduce((acc, n) => acc + (n.pontos_gerados || 0), 0) || 0;
+              setStats({ totalClientes: count || 0, totalPontos: pontos });
+            });
+          }
+        });
+      }, [userId]);
+      return (
+        <div>
+          <h2>Dashboard do Comerciante</h2>
+          <div className="card">
+            <p>Clientes atendidos: <strong>{stats.totalClientes}</strong></p>
+            <p>Total de pontos distribuídos: <strong>{stats.totalPontos}</strong></p>
+          </div>
+        </div>
+      );
+    }
+
+    function MerchantQr({ userId }) {
+      const qrRef = useRef(null);
+      const [qrValue, setQrValue] = useState("");
+
+      useEffect(() => {
+        supabase.from("Comerciantes").select("id").eq("user_id", userId).single().then(({ data }) => {
+          if (data) {
+            const val = `clube-do-parque:comerciante:${data.id}`;
+            setQrValue(val);
+            if (qrRef.current) {
+              qrRef.current.innerHTML = "";
+              new QRCode(qrRef.current, { text: val, width: 200, height: 200 });
+            }
+          }
+        });
+      }, [userId]);
+
+      return (
+        <div>
+          <h2>QR Code da sua loja</h2>
+          <p>Mostre para seus clientes escanearem (funcionalidade futura).</p>
+          <div ref={qrRef} className="qr-container"></div>
+          {qrValue && <p style={{ wordBreak: "break-all", fontSize: 12 }}>Valor: {qrValue}</p>}
+        </div>
+      );
+    }
+
+    // ==================== ADMIN ====================
+    function AdminHome() {
+      const [pendentes, setPendentes] = useState([]);
+      useEffect(() => {
+        supabase.from("Comerciantes").select("*").eq("status", "pendente").then(({ data }) => setPendentes(data || []));
+      }, []);
+
+      async function aprovar(id) {
+        await supabase.from("Comerciantes").update({ status: "aprovado" }).eq("id", id);
+        setPendentes(prev => prev.filter(c => c.id !== id));
+      }
+      async function rejeitar(id) {
+        await supabase.from("Comerciantes").update({ status: "rejeitado" }).eq("id", id);
+        setPendentes(prev => prev.filter(c => c.id !== id));
+      }
+
+      return (
+        <div>
+          <h2>Aprovar Comerciantes</h2>
+          {pendentes.length === 0 && <p>Nenhum cadastro pendente.</p>}
+          {pendentes.map(c => (
+            <div className="card" key={c.id}>
+              <p><strong>{c.nome_fantasia}</strong> (CNPJ: {c.cnpj})</p>
+              <button onClick={() => aprovar(c.id)} style={{ width: "auto", marginRight: 8, background: "#2d5a27" }}>Aprovar</button>
+              <button onClick={() => rejeitar(c.id)} style={{ width: "auto", background: "#b33" }}>Rejeitar</button>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    function AdminCustomers() {
+      const [clientes, setClientes] = useState([]);
+      useEffect(() => {
+        supabase.from("Clientes").select("user_id, cpf, pontos").then(async ({ data }) => {
+          if (data) {
+            const enriched = await Promise.all(data.map(async (c) => {
+              const { data: user } = await supabase.auth.admin.getUserById(c.user_id);
+              return { ...c, email: user?.email || "N/A" };
+            }));
+            setClientes(enriched);
+          }
+        });
+      }, []);
+
+      return (
+        <div>
+          <h2>Todos os Clientes</h2>
+          {clientes.map(c => (
+            <div className="card" key={c.user_id}>
+              <p>Email: {c.email}</p>
+              <p>CPF: {c.cpf || "Não informado"}</p>
+              <p>Pontos: {c.pontos}</p>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    // ==================== RENDER ====================
+    ReactDOM.render(<App />, document.getElementById("root"));
+  </script>
+</body>
+</html>
